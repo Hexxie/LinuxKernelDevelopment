@@ -24,8 +24,6 @@ static int device_open(struct inode *inode,
   atomic_inc(&deviceOpen);
   messagePtr = message;
 
-  MOD_INC_USE_COUNT;
-
   return 0;
 }
 
@@ -34,8 +32,6 @@ static int device_release(struct inde *inode,
   printk("device_release(%p, %p)\n", inode, file);
 
   atomic_dec(&deviceOpen);
-
-  MOD_DEC_USE_COUNT;
 
   return 0;
 }
