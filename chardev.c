@@ -9,7 +9,7 @@
 
 #define BUF_LEN 80
 
-static int deviceOpen = 0;
+static atomic_t deviceOpen = ATOMIC_INIT(0);
 static char message[BUF_LEN];
 static char *messagePtr;
 
@@ -17,11 +17,11 @@ static int device_open(struct inode *inode,
                        struct file *file) {
   printk("device_open(%p)\n", file);
 
-  if(deviceOpen) {
+  if(atomic_read(&deviceOpen)) {
     return -EBUSY;
   }
 
-  deviceOpen++;
+  atomic_inc(&deviceOpen);
   messagePtr = message;
 
   MOD_INC_USE_COUNT;
@@ -33,7 +33,7 @@ static int device_release(struct inde *inode,
                           struct file *file) {
   printk("device_release(%p, %p)\n", inode, file);
 
-  deviceOpen--;
+  atomic_dec(&deviceOpen);
 
   MOD_DEC_USE_COUNT;
 
