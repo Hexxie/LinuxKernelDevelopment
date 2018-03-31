@@ -37,25 +37,23 @@ static int device_release(struct inode *inode,
   return 0;
 }
 
-static ssize_t device_write(struct file *file,
-                            const char *buffer,
-                            size_t length,
-                            loff_t *offset) {
+static int set_msg(const char *buffer,
+                   size_t length) {
   int i;
-  printk("device write(%p, %s, %zu)", file, buffer, length);
+
   for(i = 0; i < length && BUF_LEN; i++) {
     get_user(message[i], buffer+i);  
   }
+
   messagePtr = message;
+
   return i;
 }
 
-static ssize_t device_read(struct file *file,
-			   char *buffer,
- 			   size_t length,
-			   loff_t *offset) {
+static int get_msg(char *buffer,
+                   size_t length) {
   int bytes_read = 0;
-  printk("device_read(%p,%p,%zu)\n", file, buffer, length);
+
   if(*messagePtr == 0) {
     return 0;
   }
@@ -65,6 +63,26 @@ static ssize_t device_read(struct file *file,
     length--;
     bytes_read++;
   }
+
+  return bytes_read;
+}
+
+static ssize_t device_write(struct file *file,
+                            const char *buffer,
+                            size_t length,
+                            loff_t *offset) {
+  printk("device write(%p, %s, %zu)", file, buffer, length);
+
+  return set_msg(buffer, length);
+}
+
+static ssize_t device_read(struct file *file,
+			   char *buffer,
+			   size_t length,
+			   loff_t *offset) {
+  int bytes_read = 0;
+  printk("device_read(%p,%p,%zu)\n", file, buffer, length);
+  bytes_read = get_msg(buffer, length);
   printk ("Read %d bytes, %zu left\n", bytes_read, length);
   return bytes_read;
 }
@@ -81,11 +99,11 @@ static long device_ioctl(struct file *file,
       temp = (char *) ioctl_param;
       //get value from user space
       get_user(ch, temp);
-      device_write(file, (char*) ioctl_param, i);
+      set_msg((char*) ioctl_param, i);
     break;
 
     case IOCTL_GET_MSG:
-      i = device_read(file, (char *) ioctl_param, 99, 0); 
+      i = get_msg((char *) ioctl_param, 99);
       //write value to user space
       put_user('\0', (char *) ioctl_param+i);
       break;
