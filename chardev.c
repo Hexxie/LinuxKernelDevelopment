@@ -49,8 +49,7 @@ static ssize_t device_write(struct file *file,
   return i;
 }
 
-static ssize_t device_read(stuct inode *inode,
-			   struct file *file,
+static ssize_t device_read(struct file *file,
 			   char *buffer,
  			   size_t length,
 			   loff_t *offset) {
