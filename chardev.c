@@ -1,7 +1,10 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/slab.h>
+#include <asm/uaccess.h>
 
 #include <linux/fs.h>
+#include <linux/cdev.h>
 
 #include "chardev.h"
 
@@ -29,7 +32,7 @@ static int device_release(struct inode *inode,
 static ssize_t device_write(struct file *filp,
                             const char __user *buffer,
                             size_t count,
-                            loff_t *offset) {
+                            loff_t *f_pos) {
   
   printk("device write(%p, %s, %ld)", filp, buffer, count);
   struct scull_dev *dev = filp->private_data;
@@ -94,7 +97,7 @@ static ssize_t device_write(struct file *filp,
 static ssize_t device_read(struct file *filp,
 			   char __user *buffer,
  			   size_t count,
-			   loff_t *offset) {
+			   loff_t *f_pos) {
   int bytes_read = 0;
   printk("device_read(%p,%p,%d)\n", filp, buffer, count);
   if(*messagePtr == 0) {
@@ -166,6 +169,18 @@ int device_ioctl(struct inode *inode,
   }
 
   return 0;
+}
+
+static void scull_setup_cdev(struct scull_dev *dev, int index)
+{
+  int err, devno = MKDEV(scull_major, scull_minor + index);
+  cdev_init(&dev->cdev, &scull_fops);
+  dev->cdev.owner = THIS_MODULE;
+  dev->cdev.ops = &scull_fops;
+  err = cdev_add (&dev->cdev, devno, 1);
+  /* Fail gracefully if need be */
+  if (err)
+    printk(KERN_NOTICE "Error %d adding scull%d", err, index);
 }
 
 
