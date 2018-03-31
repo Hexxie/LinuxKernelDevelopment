@@ -1,5 +1,6 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/version.h>
 
 #include <linux/fs.h>
 
@@ -68,10 +69,9 @@ static ssize_t device_read(struct file *file,
   return bytes_read;
 }
 
-int device_ioctl(struct inode *inode,
-                 struct file *file,
-                 unsigned int ioctl_num,
-                 unsigned long ioctl_param) {
+static long device_ioctl(struct file *file,
+                         unsigned int ioctl_num,
+                         unsigned long ioctl_param) {
   int i;
   char *temp;
   char ch;
@@ -94,14 +94,41 @@ int device_ioctl(struct inode *inode,
   return 0;
 }
 
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(2,6,35))
+
+/***************** compatibility routines *******************/
+
+static ssize_t device_read_old(struct inode *inode,
+                               struct file *file,
+                               char *buffer,
+                               size_t length,
+                               loff_t *offset)
+{
+  return device_read(file, buffer, length, offset);
+}
+
+static int device_ioctl_old(struct inode *inode,
+                            struct file *file,
+                            unsigned int ioctl_num,
+                            unsigned long ioctl_param)
+{
+  return (int)device_ioctl(file, ioctl_num, ioctl_param);
+}
+
+#endif
 
 /***************** module declarations **********************/
 
 struct file_operations fops = {
   .owner = THIS_MODULE,
-  .read = device_read,
   .write = device_write,
-  .ioctl = device_ioctl,
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(2,6,35))
+  .read = device_read_old,
+  .ioctl = device_ioctl_old,
+#else
+  .read = device_read,
+  .unlocked_ioctl = device_ioctl,
+#endif
   .open = device_open,
   .release = device_release
 };
