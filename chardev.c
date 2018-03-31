@@ -1,5 +1,6 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/version.h>
 #include <linux/slab.h>
 #include <asm/uaccess.h>
 
@@ -26,6 +27,26 @@ static int device_release(struct inode *inode,
                           struct file *file) {
   printk("device_release(%p, %p)\n", inode, file);
 
+  return 0;
+}
+
+static int set_msg(const char *buffer,
+                   size_t length) {
+  int i;
+
+  for(i = 0; i < length && BUF_LEN; i++) {
+    get_user(message[i], buffer+i);  
+  }
+
+  messagePtr = message;
+
+  return i;
+}
+
+static int get_msg(char *buffer,
+                   size_t length) {
+  int bytes_read = 0;
+  
   return 0;
 }
 
@@ -100,6 +121,7 @@ static ssize_t device_read(struct file *filp,
 			   loff_t *f_pos) {
   int bytes_read = 0;
   printk("device_read(%p,%p,%d)\n", filp, buffer, count);
+
   if(*messagePtr == 0) {
     return 0;
   }
@@ -145,10 +167,9 @@ static ssize_t device_read(struct file *filp,
   return retval;
 }
 
-int device_ioctl(struct inode *inode,
-                 struct file *file,
-                 unsigned int ioctl_num,
-                 unsigned long ioctl_param) {
+static long device_ioctl(struct file *file,
+                         unsigned int ioctl_num,
+                         unsigned long ioctl_param) {
   int i;
   char *temp;
   char ch;
@@ -158,11 +179,11 @@ int device_ioctl(struct inode *inode,
       temp = (char *) ioctl_param;
       //get value from user space
       get_user(ch, temp);
-      device_write(file, (char*) ioctl_param, i);
+      set_msg((char*) ioctl_param, i);
     break;
 
     case IOCTL_GET_MSG:
-      i = device_read(file, (char *) ioctl_param, 99, 0); 
+      i = get_msg((char *) ioctl_param, 99);
       //write value to user space
       put_user('\0', (char *) ioctl_param+i);
       break;
@@ -170,6 +191,29 @@ int device_ioctl(struct inode *inode,
 
   return 0;
 }
+
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(2,6,35))
+
+/***************** compatibility routines *******************/
+
+static ssize_t device_read_old(struct inode *inode,
+                               struct file *file,
+                               char *buffer,
+                               size_t length,
+                               loff_t *offset)
+{
+  return device_read(file, buffer, length, offset);
+}
+
+static int device_ioctl_old(struct inode *inode,
+                            struct file *file,
+                            unsigned int ioctl_num,
+                            unsigned long ioctl_param)
+{
+  return (int)device_ioctl(file, ioctl_num, ioctl_param);
+}
+
+#endif
 
 static void scull_setup_cdev(struct scull_dev *dev, int index)
 {
@@ -183,20 +227,20 @@ static void scull_setup_cdev(struct scull_dev *dev, int index)
     printk(KERN_NOTICE "Error %d adding scull%d", err, index);
 }
 
-
 /***************** module declarations **********************/
 
 struct file_operations fops = {
-  NULL,   /* seek */
-  device_read, 
-  device_write,
-  NULL,   /* readdir */
-  NULL,   /* select */
-  device_ioctl,   /* ioctl */
-  NULL,   /* mmap */
-  device_open,
-  NULL,  /* flush */
-  device_release  /* a.k.a. close */
+  .owner = THIS_MODULE,
+  .write = device_write,
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(2,6,35))
+  .read = device_read_old,
+  .ioctl = device_ioctl_old,
+#else
+  .read = device_read,
+  .unlocked_ioctl = device_ioctl,
+#endif
+  .open = device_open,
+  .release = device_release
 };
 
 /* Initialize the module - Register the character device */
@@ -207,7 +251,7 @@ int init_module()
   /* Register the character device (atleast try) */
   ret_val = module_register_chrdev(MAJOR_NUM, 
                                  DEVICE_NAME,
-                                 &Fops);
+                                 &fops);
 
   /* Negative values signify an error */
   if (ret_val < 0) {
