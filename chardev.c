@@ -9,7 +9,6 @@
 
 #define BUF_LEN 80
 
-static int deviceOpen = 0;
 static char message[BUF_LEN];
 static char *messagePtr;
 
@@ -17,60 +16,130 @@ static int device_open(struct inode *inode,
                        struct file *file) {
   printk("device_open(%p)\n", file);
 
-  if(deviceOpen) {
-    return -EBUSY;
-  }
-
-  deviceOpen++;
-  messagePtr = message;
-
-  MOD_INC_USE_COUNT;
-
   return 0;
 }
 
-static int device_release(struct inde *inode,
+static int device_release(struct inode *inode,
                           struct file *file) {
   printk("device_release(%p, %p)\n", inode, file);
 
-  deviceOpen--;
-
-  MOD_DEC_USE_COUNT;
-
   return 0;
 }
 
-static ssize_t device_write(struct file *file,
-                            const char *buffer,
-                            size_t length,
+static ssize_t device_write(struct file *filp,
+                            const char __user *buffer,
+                            size_t count,
                             loff_t *offset) {
-  int i;
-  printk("device write(%p, %s, %d)", file, buffer, length);
-  for(i = 0; i < length && BUF_LEN; i++) {
-    get_user(message[i], buffer+i);  
+  
+  printk("device write(%p, %s, %ld)", filp, buffer, count);
+  struct scull_dev *dev = filp->private_data;
+  struct scull_qset *dptr;
+  int quantum = dev->quantum, qset = dev->qset;
+  int itemsize = quantum * qset;
+  int item, s_pos, q_pos, rest;
+
+  ssize_t retval = -ENOMEM; /* value used in "goto out" statements */
+
+  if (down_interruptible(&dev->sem)) {
+    return -ERESTARTSYS;
   }
-  messagePtr = message;
-  return i;
+
+  /* find listitem, qset index and offset in the quantum */
+  item = (long)*f_pos / itemsize;
+  rest = (long)*f_pos % itemsize;
+  s_pos = rest / quantum; q_pos = rest % quantum;
+
+  /* follow the list up to the right position */
+  dptr = scull_follow(dev, item);
+  if (dptr == NULL) {
+    goto out;
+  }
+
+  if (!dptr->data) {
+    dptr->data = kmalloc(qset * sizeof(char *), GFP_KERNEL);
+
+    if (!dptr->data) {
+     goto out;
+    }
+
+    memset(dptr->data, 0, qset * sizeof(char *));
+  }
+  if (!dptr->data[s_pos]) {
+    dptr->data[s_pos] = kmalloc(quantum, GFP_KERNEL);
+    if (!dptr->data[s_pos]) {
+      goto out;
+    }
+  }
+  /* write only up to the end of this quantum */
+  if (count > quantum - q_pos) {
+    count = quantum - q_pos;
+  }
+  if (copy_from_user(dptr->data[s_pos]+q_pos, buf, count)) {
+    retval = -EFAULT;
+    goto out;
+  }
+
+  *f_pos += count;
+  retval = count;
+  /* update the size */
+  if (dev->size < *f_pos) {
+    dev->size = *f_pos;
+  }
+
+  out:
+  up(&dev->sem);
+  return retval;
 }
 
-static ssize_t device_read(struct inode *inode,
-			   struct file *file,
-			   char *buffer,
- 			   size_t length,
+static ssize_t device_read(struct file *filp,
+			   char __user *buffer,
+ 			   size_t count,
 			   loff_t *offset) {
   int bytes_read = 0;
-  printk("device_read(%p,%p,%d)\n", file, buffer, length);
+  printk("device_read(%p,%p,%d)\n", filp, buffer, count);
   if(*messagePtr == 0) {
     return 0;
   }
  
-  while(length && *messagePtr) {
-    put_user(*(messagePtr++), buffer++);
-    length--;
-    bytes_read++;
+  struct scull_dev *dev = filp->private_data;
+  struct scull_qset *dptr;
+  int quantum = dev->quantum, qset = dev->qset;
+  int itemsize = quantum * qset; //count bites in the listitem
+  int item, s_pos, q_pos, rest;
+  ssize_t retval = 0;
+
+  if (down_interruptible(&dev->sem)) {
+    return -ERESTARTSYS;
   }
-  printk ("Read %d bytes, %d left\n", bytes_read, length);
-  return bytes_read;
+  if(*f_pos >= dev->size) {
+    goto out; //!!!TBD!!!
+  }  
+  if(*f_pos + count > dev->size) {
+    count = dev->size - *f_pos;
+  }
+
+  //find listitem, qset index and offset in quantum
+  item = (long)*f_pos / itemsize;
+  rest = (long)*f_pos % itemsize;
+  s_pos = rest / quantum; q_pos = rest % quantum;
+  /* follow the list up to the right position (defined elsewhere) */
+  dptr = scull_follow(dev, item);
+  if (dptr = = NULL || !dptr->data || ! dptr->data[s_pos]) {
+    goto out; /* don't fill holes */
+  } 
+  /* read only up to the end of this quantum */
+  if (count > quantum - q_pos) {
+    count = quantum - q_pos;
+  }
+  if (copy_to_user(buf, dptr->data[s_pos] + q_pos, count)) {
+    retval = -EFAULT;
+    goto out;
+  }
+  *f_pos += count;
+  retval = count;
+  out:
+  up(&dev->sem);
+  return retval;
 }
 
 int device_ioctl(struct inode *inode,
