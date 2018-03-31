@@ -27,7 +27,7 @@ static int device_open(struct inode *inode,
   return 0;
 }
 
-static int device_release(struct inde *inode,
+static int device_release(struct inode *inode,
                           struct file *file) {
   printk("device_release(%p, %p)\n", inode, file);
 
