@@ -83,7 +83,7 @@ static ssize_t device_read(struct file *file,
   int bytes_read = 0;
   printk("device_read(%p,%p,%zu)\n", file, buffer, length);
   bytes_read = get_msg(buffer, length);
-  printk ("Read %d bytes, %zu left\n", bytes_read, length);
+  printk ("Read %d bytes, %zu left\n", bytes_read, length - bytes_read);
   return bytes_read;
 }
 
@@ -159,7 +159,7 @@ int init_module()
   /* Register the character device (atleast try) */
   ret_val = module_register_chrdev(MAJOR_NUM, 
                                  DEVICE_NAME,
-                                 &Fops);
+                                 &fops);
 
   /* Negative values signify an error */
   if (ret_val < 0) {
