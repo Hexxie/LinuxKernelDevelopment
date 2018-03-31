@@ -41,7 +41,7 @@ static ssize_t device_write(struct file *file,
                             size_t length,
                             loff_t *offset) {
   int i;
-  printk("device write(%p, %s, %d)", file, buffer, length);
+  printk("device write(%p, %s, %zu)", file, buffer, length);
   for(i = 0; i < length && BUF_LEN; i++) {
     get_user(message[i], buffer+i);  
   }
@@ -55,7 +55,7 @@ static ssize_t device_read(struct inode *inode,
  			   size_t length,
 			   loff_t *offset) {
   int bytes_read = 0;
-  printk("device_read(%p,%p,%d)\n", file, buffer, length);
+  printk("device_read(%p,%p,%zu)\n", file, buffer, length);
   if(*messagePtr == 0) {
     return 0;
   }
@@ -65,7 +65,7 @@ static ssize_t device_read(struct inode *inode,
     length--;
     bytes_read++;
   }
-  printk ("Read %d bytes, %d left\n", bytes_read, length);
+  printk ("Read %d bytes, %zu left\n", bytes_read, length);
   return bytes_read;
 }
 
