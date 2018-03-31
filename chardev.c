@@ -49,7 +49,7 @@ static ssize_t device_write(struct file *file,
   return i;
 }
 
-static ssize_t device_read(struct inode *inode,
+static ssize_t device_read(stuct inode *inode,
 			   struct file *file,
 			   char *buffer,
  			   size_t length,
@@ -99,16 +99,12 @@ int device_ioctl(struct inode *inode,
 /***************** module declarations **********************/
 
 struct file_operations fops = {
-  NULL,   /* seek */
-  device_read, 
-  device_write,
-  NULL,   /* readdir */
-  NULL,   /* select */
-  device_ioctl,   /* ioctl */
-  NULL,   /* mmap */
-  device_open,
-  NULL,  /* flush */
-  device_release  /* a.k.a. close */
+  .owner = THIS_MODULE,
+  .read = device_read,
+  .write = device_write,
+  .ioctl = device_ioctl,
+  .open = device_open,
+  .release = device_release
 };
 
 /* Initialize the module - Register the character device */
