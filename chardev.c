@@ -2,194 +2,149 @@
 #include <linux/module.h>
 #include <linux/version.h>
 #include <linux/slab.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 
 #include <linux/fs.h>
 #include <linux/cdev.h>
 
 #include "chardev.h"
 
-#define DEVICE_NAME "coffee"
+/************************** Global Data Definitions **************************/
 
+#define DEVICE_NAME "coffee"
 #define BUF_LEN 80
 
-static char message[BUF_LEN];
-static char *messagePtr;
-
+/************************* Static Function Prototypes ************************/
 static int device_open(struct inode *inode,
-                       struct file *file) {
-  printk("device_open(%p)\n", file);
+                       struct file *file);
+static int device_release(struct inode *inode,
+                          struct file *file);
+
+static ssize_t device_write(struct file *filp,
+                            const char __user *buffer,
+                            size_t count,
+                            loff_t *f_pos);
+
+static ssize_t device_read(struct file *filp,
+			   char __user *buffer,
+ 			   size_t count,
+			   loff_t *f_pos);
+
+static ssize_t device_read_old(struct inode *inode,
+                               struct file *file,
+                               char *buffer,
+                               size_t length,
+                               loff_t *offset);
+
+/************************** Static Data Definitions **************************/
+
+static int majorNumber;         
+static char message[BUF_LEN];
+static short size_of_message;
+static atomic_t isDeviceOpen = ATOMIC_INIT(0);
+
+static struct file_operations fops = {
+  .owner = THIS_MODULE,
+  .write = device_write,
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(2,6,35))
+  .read = device_read_old,
+#else
+  .read = device_read,
+#endif
+  .open = device_open,
+  .release = device_release
+};
+
+/********************************** Functions ********************************/
+
+/** @brief initialization function
+ *  Dynamically allocate major number for required device.
+ *  @return 0 in case of success
+ */
+int init_module(void)
+{
+  int ret_val;
+
+  printk(KERN_INFO "Initialization lkm");
+
+  //dynamically allocate a major number fot the device
+  majorNumber = register_chrdev(0, DEVICE_NAME, &fops);
+  if(majorNumber < 0) {
+    printk(KERN_ALERT "Failed to register major number");
+    return majorNumber;
+  }
+  printk(KERN_INFO "Registered with major number: ", majorNumber);
 
   return 0;
 }
 
+
+/** @brief cleanup function
+ *  Unregister used device.
+ */
+void cleanup_module()
+{
+  int ret;
+
+  /* Unregister the device */
+  unregister_chrdev(majorNumber, DEVICE_NAME);
+}  
+
+/** @brief open function which called everytime when device is opened
+ *  Increment counter if device was not opened, or return EBUSY if counter
+ *  already incremented
+ *  @param inode - pointer to an inode object (see linux/fs.h)
+ *  @param file  - ponter to a file object (see linux/fs.h)
+ *  return 0 in case of success or BUSY if counter incremented
+ */
+static int device_open(struct inode *inode,
+                       struct file *file) {
+
+  printk("device_open(%p)\n", file);
+  if(atomic_read(&isDeviceOpen)) {
+    return -EBUSY;
+  }
+  atomic_inc(&isDeviceOpen);	 
+  return 0;
+}
+
+/** @brief release function which called everytime when device is  closed
+ *  Decrement counter only.
+ *  @param inode - pointer to an inode object (see linux/fs.h)
+ *  @param file  - ponter to a file object (see linux/fs.h)
+ *  return 0 in case of success
+ */
 static int device_release(struct inode *inode,
                           struct file *file) {
   printk("device_release(%p, %p)\n", inode, file);
-
-  return 0;
-}
-
-static int set_msg(const char *buffer,
-                   size_t length) {
-  int i;
-
-  for(i = 0; i < length && BUF_LEN; i++) {
-    get_user(message[i], buffer+i);  
-  }
-
-  messagePtr = message;
-
-  return i;
-}
-
-static int get_msg(char *buffer,
-                   size_t length) {
-  int bytes_read = 0;
-  
+  atomic_dec(&isDeviceOpen);
   return 0;
 }
 
 static ssize_t device_write(struct file *filp,
                             const char __user *buffer,
-                            size_t count,
+                            size_t len,
                             loff_t *f_pos) {
   
-  printk("device write(%p, %s, %ld)", filp, buffer, count);
-  struct scull_dev *dev = filp->private_data;
-  struct scull_qset *dptr;
-  int quantum = dev->quantum, qset = dev->qset;
-  int itemsize = quantum * qset;
-  int item, s_pos, q_pos, rest;
-
-  ssize_t retval = -ENOMEM; /* value used in "goto out" statements */
-
-  if (down_interruptible(&dev->sem)) {
-    return -ERESTARTSYS;
-  }
-
-  /* find listitem, qset index and offset in the quantum */
-  item = (long)*f_pos / itemsize;
-  rest = (long)*f_pos % itemsize;
-  s_pos = rest / quantum; q_pos = rest % quantum;
-
-  /* follow the list up to the right position */
-  dptr = scull_follow(dev, item);
-  if (dptr == NULL) {
-    goto out;
-  }
-
-  if (!dptr->data) {
-    dptr->data = kmalloc(qset * sizeof(char *), GFP_KERNEL);
-
-    if (!dptr->data) {
-     goto out;
-    }
-
-    memset(dptr->data, 0, qset * sizeof(char *));
-  }
-  if (!dptr->data[s_pos]) {
-    dptr->data[s_pos] = kmalloc(quantum, GFP_KERNEL);
-    if (!dptr->data[s_pos]) {
-      goto out;
-    }
-  }
-  /* write only up to the end of this quantum */
-  if (count > quantum - q_pos) {
-    count = quantum - q_pos;
-  }
-  if (copy_from_user(dptr->data[s_pos]+q_pos, buf, count)) {
-    retval = -EFAULT;
-    goto out;
-  }
-
-  *f_pos += count;
-  retval = count;
-  /* update the size */
-  if (dev->size < *f_pos) {
-    dev->size = *f_pos;
-  }
-
-  out:
-  up(&dev->sem);
-  return retval;
+  printk("device write(%p, %s, %ld)", filp, buffer, len);
+  sprintf(message, "%s(%zu letters)", buffer, len);
+  size_of_message = strlen(message);
+  printk(KERN_INFO "Received %zu characters from the user\n", len);
 }
 
 static ssize_t device_read(struct file *filp,
 			   char __user *buffer,
- 			   size_t count,
+ 			   size_t len,
 			   loff_t *f_pos) {
-  int bytes_read = 0;
-  printk("device_read(%p,%p,%d)\n", filp, buffer, count);
-
-  if(*messagePtr == 0) {
-    return 0;
+  int result = 0;
+  result = copy_to_user(buffer, message, size_of_message);
+  if(result == 0) {
+    printk(KERN_INFO "Sent %d characters to the user\n", size_of_message);
+    return (size_of_message=0);  
+  } else {
+    printk(KERN_INFO "failed to send character to the user. Error: %d", result);
+    return -EFAULT;
   }
- 
-  struct scull_dev *dev = filp->private_data;
-  struct scull_qset *dptr;
-  int quantum = dev->quantum, qset = dev->qset;
-  int itemsize = quantum * qset; //count bites in the listitem
-  int item, s_pos, q_pos, rest;
-  ssize_t retval = 0;
-
-  if (down_interruptible(&dev->sem)) {
-    return -ERESTARTSYS;
-  }
-  if(*f_pos >= dev->size) {
-    goto out; //!!!TBD!!!
-  }  
-  if(*f_pos + count > dev->size) {
-    count = dev->size - *f_pos;
-  }
-
-  //find listitem, qset index and offset in quantum
-  item = (long)*f_pos / itemsize;
-  rest = (long)*f_pos % itemsize;
-  s_pos = rest / quantum; q_pos = rest % quantum;
-  /* follow the list up to the right position (defined elsewhere) */
-  dptr = scull_follow(dev, item);
-  if (dptr = = NULL || !dptr->data || ! dptr->data[s_pos]) {
-    goto out; /* don't fill holes */
-  } 
-  /* read only up to the end of this quantum */
-  if (count > quantum - q_pos) {
-    count = quantum - q_pos;
-  }
-  if (copy_to_user(buf, dptr->data[s_pos] + q_pos, count)) {
-    retval = -EFAULT;
-    goto out;
-  }
-  *f_pos += count;
-  retval = count;
-  out:
-  up(&dev->sem);
-  return retval;
-}
-
-static long device_ioctl(struct file *file,
-                         unsigned int ioctl_num,
-                         unsigned long ioctl_param) {
-  int i;
-  char *temp;
-  char ch;
-  switch (ioctl_num) {
-
-    case IOCTL_SET_MSG:
-      temp = (char *) ioctl_param;
-      //get value from user space
-      get_user(ch, temp);
-      set_msg((char*) ioctl_param, i);
-    break;
-
-    case IOCTL_GET_MSG:
-      i = get_msg((char *) ioctl_param, 99);
-      //write value to user space
-      put_user('\0', (char *) ioctl_param+i);
-      break;
-  }
-
-  return 0;
 }
 
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(2,6,35))
@@ -205,88 +160,5 @@ static ssize_t device_read_old(struct inode *inode,
   return device_read(file, buffer, length, offset);
 }
 
-static int device_ioctl_old(struct inode *inode,
-                            struct file *file,
-                            unsigned int ioctl_num,
-                            unsigned long ioctl_param)
-{
-  return (int)device_ioctl(file, ioctl_num, ioctl_param);
-}
-
 #endif
-
-static void scull_setup_cdev(struct scull_dev *dev, int index)
-{
-  int err, devno = MKDEV(scull_major, scull_minor + index);
-  cdev_init(&dev->cdev, &scull_fops);
-  dev->cdev.owner = THIS_MODULE;
-  dev->cdev.ops = &scull_fops;
-  err = cdev_add (&dev->cdev, devno, 1);
-  /* Fail gracefully if need be */
-  if (err)
-    printk(KERN_NOTICE "Error %d adding scull%d", err, index);
-}
-
-/***************** module declarations **********************/
-
-struct file_operations fops = {
-  .owner = THIS_MODULE,
-  .write = device_write,
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(2,6,35))
-  .read = device_read_old,
-  .ioctl = device_ioctl_old,
-#else
-  .read = device_read,
-  .unlocked_ioctl = device_ioctl,
-#endif
-  .open = device_open,
-  .release = device_release
-};
-
-/* Initialize the module - Register the character device */
-int init_module()
-{
-  int ret_val;
-
-  /* Register the character device (atleast try) */
-  ret_val = module_register_chrdev(MAJOR_NUM, 
-                                 DEVICE_NAME,
-                                 &fops);
-
-  /* Negative values signify an error */
-  if (ret_val < 0) {
-    printk ("%s failed with %d\n",
-            "Sorry, registering the character device ",
-            ret_val);
-    return ret_val;
-  }
-
-  printk ("%s The major device number is %d.\n",
-          "Registeration is a success", 
-          MAJOR_NUM);
-  printk ("If you want to talk to the device driver,\n");
-  printk ("you'll have to create a device file. \n");
-  printk ("We suggest you use:\n");
-  printk ("mknod %s c %d 0\n", DEVICE_FILE_NAME, 
-          MAJOR_NUM);
-  printk ("The device file name is important, because\n");
-  printk ("the ioctl program assumes that's the\n");
-  printk ("file you'll use.\n");
-
-  return 0;
-}
-
-
-/* Cleanup - unregister the appropriate file from /proc */
-void cleanup_module()
-{
-  int ret;
-
-  /* Unregister the device */
-  ret = module_unregister_chrdev(MAJOR_NUM, DEVICE_NAME);
- 
-  /* If there's an error, report it */ 
-  if (ret < 0)
-    printk("Error in module_unregister_chrdev: %d\n", ret);
-}  
 
