@@ -3,16 +3,20 @@
 #include <linux/version.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/device.h> 
 
 #include <linux/fs.h>
 #include <linux/cdev.h>
 
 #include "chardev.h"
 
+MODULE_LICENSE("GPL");
+
 /************************** Global Data Definitions **************************/
 
 #define DEVICE_NAME "coffee"
 #define BUF_LEN 80
+#define  CLASS_NAME  "chardrv"
 
 /************************* Static Function Prototypes ************************/
 static int device_open(struct inode *inode,
@@ -42,6 +46,8 @@ static int majorNumber;
 static char message[BUF_LEN];
 static short size_of_message;
 static atomic_t isDeviceOpen = ATOMIC_INIT(0);
+static struct class*  deviceClass  = NULL; 
+static struct device* coffeeDevice = NULL;
 
 static struct file_operations fops = {
   .owner = THIS_MODULE,
@@ -65,7 +71,7 @@ int init_module(void)
 {
   int ret_val;
 
-  printk(KERN_INFO "Initialization lkm");
+  printk("Initialization lkm");
 
   //dynamically allocate a major number fot the device
   majorNumber = register_chrdev(0, DEVICE_NAME, &fops);
@@ -73,7 +79,26 @@ int init_module(void)
     printk(KERN_ALERT "Failed to register major number");
     return majorNumber;
   }
-  printk(KERN_INFO "Registered with major number: ", majorNumber);
+  printk("Registered with major number: %d", majorNumber);
+
+   // Register the device class
+   deviceClass = class_create(THIS_MODULE, CLASS_NAME);
+   if (IS_ERR(deviceClass)){                
+      unregister_chrdev(majorNumber, DEVICE_NAME);
+      printk("Failed to register device class\n");
+      return PTR_ERR(deviceClass);          
+   }
+   printk("EBBChar: device class registered correctly\n");
+ 
+   // Register the device driver
+   coffeeDevice = device_create(deviceClass, NULL, MKDEV(majorNumber, 0), NULL, DEVICE_NAME);
+   if (IS_ERR(coffeeDevice)){             
+      class_destroy(deviceClass);           
+      unregister_chrdev(majorNumber, DEVICE_NAME);
+      printk("Failed to create the device\n");
+      return PTR_ERR(coffeeDevice);
+   }
+   printk("EBBChar: device class created correctly\n");
 
   return 0;
 }
@@ -121,6 +146,13 @@ static int device_release(struct inode *inode,
   return 0;
 }
 
+/** @brief function to write symbols from user space to kernel
+ *  @param filp  - ponter to a file object (see linux/fs.h)
+ *  @param buffer - buffer with strick which will be written to the device
+ *  @param len - length of the array with data
+ *  @param f_pos - offces if required
+ *  return 0 in case of success
+ */
 static ssize_t device_write(struct file *filp,
                             const char __user *buffer,
                             size_t len,
@@ -132,6 +164,13 @@ static ssize_t device_write(struct file *filp,
   printk(KERN_INFO "Received %zu characters from the user\n", len);
 }
 
+/** @brief function to read symbols from kernel to user space
+ *  @param filp  - ponter to a file object (see linux/fs.h)
+ *  @param buffer - buffer with strick which will be written to the device
+ *  @param len - length of the array with data
+ *  @param f_pos - offces if required
+ *  return 0 in case of success
+ */
 static ssize_t device_read(struct file *filp,
 			   char __user *buffer,
  			   size_t len,
